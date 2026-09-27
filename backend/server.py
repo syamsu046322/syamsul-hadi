@@ -595,11 +595,11 @@ async def edit_movement_date(mid: str, body: dict, user: OwnerUser):
 # --------------------------------------------------------------------------- cek fisik stok (stock opname)
 
 def rack_sort_key(rack: str):
-    """Urutan alami kode rak: A1.01 < A1.2 < A2 < B1. Part tanpa rak di urutan akhir."""
+    """Urutan alami kode rak ascending: 1 < 2 < 10 < A1 < A1.01 < A1.2 < A2 < A10 < B1. Part tanpa rak di urutan akhir."""
     s = (rack or "").strip()
     if not s:
         return (1, [])
-    return (0, [(1, int(t)) if t.isdigit() else (0, t) for t in re.findall(r"\d+|\D+", s.lower())])
+    return (0, [(0, int(t), "") if t.isdigit() else (1, 0, t.strip()) for t in re.findall(r"\d+|\D+", s.lower())])
 
 
 async def get_stock_check(cid: str) -> dict:
@@ -620,7 +620,7 @@ async def start_stock_check(user: PartmanUser):
     if existing:
         return existing
     parts = await db.parts.find({"deleted_at": None}, {"_id": 0}).to_list(None)
-    parts.sort(key=lambda p: rack_sort_key(p.get("rack")))
+    parts.sort(key=lambda p: (rack_sort_key(p.get("rack")), (p.get("name") or "").lower()))
     chk = {"id": new_id(), "date": today, "status": "PROSES", "created_by": user["username"], "created_at": iso(now()),
            "submitted_at": None, "decided_at": None, "decided_by": None,
            "total_items": len(parts), "checked_count": 0, "diff_count": 0}
@@ -643,7 +643,12 @@ async def list_stock_checks(_: PartmanUser):
 @api.get("/stock-checks/{cid}")
 async def stock_check_detail(cid: str, _: PartmanUser):
     chk = await get_stock_check(cid)
-    items = await db.stock_check_items.find({"check_id": cid}, {"_id": 0}).sort("seq", 1).to_list(None)
+    items = await db.stock_check_items.find({"check_id": cid}, {"_id": 0}).to_list(None)
+    # Ikuti lokasi rak terbaru dari master part, lalu urutkan lokasi terkecil → terbesar (tanpa rak paling bawah)
+    racks = {p["id"]: p.get("rack") or "" for p in await db.parts.find({"id": {"$in": [i["part_id"] for i in items]}}, {"_id": 0, "id": 1, "rack": 1}).to_list(None)}
+    for it in items:
+        it["rack"] = racks.get(it["part_id"], it.get("rack") or "")
+    items.sort(key=lambda i: (rack_sort_key(i.get("rack")), (i.get("part_name") or "").lower()))
     chk.pop("_id", None)
     return {**chk, "items": items}
 
@@ -2276,6 +2281,31 @@ async def verify_owner(body: OwnerPasswordIn, _: CurrentUser):
     if not await verify_owner_password(body.owner_password):
         raise HTTPException(status_code=400, detail="Password Owner salah")
     return {"ok": True}
+
+
+# Koleksi data operasional/percobaan. Master yang DIPERTAHANKAN: users, parts, services, outlets, tools, settings, meta.
+TRIAL_DATA_COLLECTIONS = [
+    "service_transactions", "service_items", "service_complaints", "service_estimations", "service_additional_items", "work_orders",
+    "payments", "invoices", "debt_payments", "service_history", "transaction_status_logs", "whatsapp_logs",
+    "sales", "stock_movements", "stock_checks", "stock_check_items", "outlet_stocks", "expenses", "tool_checklists",
+    "customers", "vehicles", "notifications", "counters",
+]
+
+
+@api.post("/admin/reset-trial-data")
+async def reset_trial_data(body: OwnerPasswordIn, user: OwnerUser):
+    """Hapus semua data percobaan (transaksi, servis, penjualan, mutasi stok, belanja, pelanggan, motor) sekaligus.
+    Data master (part, jasa, pengguna, outlet, tools, pengaturan bengkel) tetap. Stok part direset ke 0, nomor urut mulai dari awal."""
+    if not await verify_owner_password(body.owner_password):
+        raise HTTPException(status_code=400, detail="Password Owner salah")
+    deleted: dict[str, int] = {}
+    for name in TRIAL_DATA_COLLECTIONS:
+        r = await db[name].delete_many({})
+        deleted[name] = r.deleted_count
+    await db.audit_logs.delete_many({})
+    stock_reset = (await db.parts.update_many({}, {"$set": {"stock": 0}})).modified_count
+    await audit(None, "RESET_TRIAL_DATA", user, f"Hapus data percobaan: {sum(deleted.values())} dokumen, stok {stock_reset} part direset ke 0")
+    return {"ok": True, "deleted": deleted, "total_deleted": sum(deleted.values()), "stock_reset": stock_reset}
 
 
 # --------------------------------------------------------------------------- outlets & direct part sales

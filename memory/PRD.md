@@ -28,3 +28,9 @@
 - Sheet (ui.tsx) dibungkus KeyboardAvoidingView (react-native-keyboard-controller) → daftar hasil pencarian part tampil di atas keyboard.
 - Cetak nota/faktur: format thermal 80mm (src/thermal.ts: @page 80mm, body 72mm, item 2 baris; iOS width 226pt).
 - Tes: tests/test_cancel_profit_wa.py (3) + tests/test_iteration2_cancel_profit_wa_ext.py (5) PASS. Laporan: /app/test_reports/iteration_2.json
+
+## Implemented (2026-09-27) — Iterasi 3: urutan rak cek fisik + Hapus Data Percobaan
+- Cek Fisik Stok: urutan lokasi rak ascending alami (1 < 2 < 10 < A1 < A1.2 < A2 < A10 < B1; tanpa rak paling bawah), diterapkan di backend (create + GET detail, rak ikut master terbaru) dan client-side (cek-stok/[id].tsx cmpRack).
+- POST /admin/reset-trial-data (owner + password owner): hapus service_transactions/items/complaints/estimations/additional_items, work_orders, payments, invoices, debt_payments, service_history, status_logs, whatsapp_logs, audit_logs, sales, stock_movements, stock_checks(+items), outlet_stocks, expenses, tool_checklists, customers, vehicles, notifications, counters; stok part reset 0. Master tetap: users, parts, services, outlets, tools, settings, meta.
+- UI: tab Lainnya (owner) → "Hapus Data Percobaan" → sheet password owner (testID menu-reset-trial-data, reset-trial-password-input, reset-trial-confirm-button).
+- Tes: tests/test_rack_sort_reset.py 4/4 PASS.

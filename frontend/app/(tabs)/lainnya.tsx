@@ -1,11 +1,13 @@
 import Ionicons from "@react-native-vector-icons/ionicons";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import React, { useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { api } from "@/src/api";
 import { useAuth } from "@/src/auth";
-import { Confirm } from "@/src/components/ui";
+import { Button, Confirm, Input, Sheet, useToast } from "@/src/components/ui";
 import { makeStyles, useTheme } from "@/src/theme";
 
 type IoniconName = React.ComponentProps<typeof Ionicons>["name"];
@@ -15,8 +17,17 @@ export default function Lainnya() {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const qc = useQueryClient();
+  const toast = useToast();
   const { user, can, logout } = useAuth();
   const [confirm, setConfirm] = useState(false);
+  const [reset, setReset] = useState(false);
+  const [resetPw, setResetPw] = useState("");
+  const resetMut = useMutation({
+    mutationFn: () => api<{ total_deleted: number; stock_reset: number }>("/admin/reset-trial-data", { method: "POST", body: { owner_password: resetPw } }),
+    onSuccess: (r) => { qc.invalidateQueries(); setReset(false); setResetPw(""); toast.show(`Data percobaan dihapus (${r.total_deleted} data). Stok ${r.stock_reset} part direset ke 0.`, "success"); },
+    onError: (e: any) => toast.show(e.message, "error"),
+  });
 
   const items: { label: string; sub: string; icon: IoniconName; href: string; show: boolean; testID: string }[] = [
     { label: "Histori Servis", sub: "Cari nota, nopol, pelanggan", icon: "time-outline", href: "/histori", show: true, testID: "menu-history" },
@@ -56,6 +67,16 @@ export default function Lainnya() {
             <Ionicons name="chevron-forward" size={20} color={colors.muted} />
           </Pressable>
         ))}
+        {user?.role === "owner" ? (
+          <Pressable style={[styles.item, { borderColor: colors.warning, marginTop: 12 }]} onPress={() => { setReset(true); setResetPw(""); }} testID="menu-reset-trial-data">
+            <View style={[styles.iconBox, { backgroundColor: colors.warning }]}><Ionicons name="trash-bin-outline" size={22} color={colors.onSurfaceInverse} /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.itemLabel, { color: colors.warning }]}>Hapus Data Percobaan</Text>
+              <Text style={styles.itemSub}>Kosongkan transaksi, servis, penjualan, mutasi stok, belanja, pelanggan. Master part, jasa, pengguna & pengaturan tetap.</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color={colors.muted} />
+          </Pressable>
+        ) : null}
         <Pressable style={[styles.item, { borderColor: colors.error, marginTop: 12 }]} onPress={() => setConfirm(true)} testID="menu-logout">
           <View style={[styles.iconBox, { backgroundColor: colors.error }]}><Ionicons name="log-out-outline" size={22} color={colors.onError} /></View>
           <Text style={[styles.itemLabel, { color: colors.error }]}>Keluar</Text>
@@ -63,6 +84,16 @@ export default function Lainnya() {
       </ScrollView>
       <Confirm visible={confirm} title="Keluar" message="Anda yakin ingin keluar dari aplikasi?" onCancel={() => setConfirm(false)} confirmLabel="YA, KELUAR" danger
         onConfirm={async () => { setConfirm(false); await logout(); router.replace("/login"); }} testID="logout-confirm" />
+      <Sheet visible={reset} onClose={() => setReset(false)} title="Hapus Data Percobaan" testID="reset-trial-sheet" scroll={false}>
+        <Text style={styles.resetMsg}>
+          Semua data berikut akan DIHAPUS PERMANEN: transaksi & nota servis, penjualan part, pembayaran, piutang, mutasi & cek fisik stok, belanja/kasbon, pelanggan & motor, notifikasi, serta nomor urut (antrian/TRX/nota) direset dari awal. Stok semua part direset ke 0.
+        </Text>
+        <Text style={[styles.resetMsg, { color: colors.success }]}>Tetap aman: data part, jasa, pengguna/karyawan, outlet, tools, dan profil bengkel.</Text>
+        <Input label="Password Owner" value={resetPw} onChangeText={setResetPw} secureTextEntry testID="reset-trial-password-input" />
+        <Button title="YA, HAPUS SEMUA DATA PERCOBAAN" variant="danger" loading={resetMut.isPending} disabled={!resetPw} onPress={() => resetMut.mutate()} testID="reset-trial-confirm-button" />
+        <View style={{ height: 8 }} />
+        <Button title="BATAL" variant="outline" onPress={() => setReset(false)} testID="reset-trial-cancel-button" />
+      </Sheet>
     </View>
   );
 }
@@ -76,4 +107,5 @@ const useStyles = makeStyles((c) => ({
   iconBox: { width: 40, height: 40, backgroundColor: c.surfaceInverse, alignItems: "center", justifyContent: "center" },
   itemLabel: { fontSize: 16, color: c.onSurface, fontWeight: "500" },
   itemSub: { fontSize: 12, color: c.muted, marginTop: 2 },
+  resetMsg: { fontSize: 13, color: c.onSurface, lineHeight: 19, marginBottom: 10 },
 }));

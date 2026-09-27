@@ -14,6 +14,22 @@ import { CHECK_TONE } from "@/app/cek-stok";
 
 type Filter = "all" | "diff" | "unchecked";
 
+/** Kunci urutan alami lokasi rak: 1 < 2 < 10 < A1 < A1.2 < A2 < A10 < B1; tanpa rak paling bawah. */
+function rackKey(rack?: string): (string | number)[] {
+  const s = (rack ?? "").trim().toLowerCase();
+  if (!s) return [1];
+  return [0, ...(s.match(/\d+|\D+/g) ?? []).flatMap((t) => (/^\d+$/.test(t) ? [0, Number(t), ""] : [1, 0, t.trim()]))];
+}
+function cmpRack(a: any, b: any): number {
+  const ka = rackKey(a.rack), kb = rackKey(b.rack);
+  for (let i = 0; i < Math.max(ka.length, kb.length); i++) {
+    if (ka[i] === undefined) return -1;
+    if (kb[i] === undefined) return 1;
+    if (ka[i] !== kb[i]) return ka[i] < kb[i] ? -1 : 1;
+  }
+  return (a.part_name ?? "").localeCompare(b.part_name ?? "");
+}
+
 export default function CekStokDetail() {
   const styles = useStyles();
   const { colors } = useTheme();
@@ -30,7 +46,7 @@ export default function CekStokDetail() {
   const q = useQuery({ queryKey: ["stock-check", id], queryFn: () => api<any>(`/stock-checks/${id}`) });
   const chk = q.data;
   const shown = useMemo(() => {
-    const items: any[] = chk?.items ?? [];
+    const items: any[] = [...(chk?.items ?? [])].sort(cmpRack);
     return items.filter((it) => filter === "diff" ? it.checked && it.diff !== 0 : filter === "unchecked" ? !it.checked : true);
   }, [chk, filter]);
   const isProses = chk?.status === "PROSES";
