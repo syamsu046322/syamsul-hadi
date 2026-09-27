@@ -1,0 +1,33 @@
+{
+  "summary": "Smoke test of restored Klinik Suel Motor project in new environment. Backend: 13/13 pytest passed via public URL (health, 4-role login, auth/me, 21 authenticated GET endpoints with no 500s, RBAC spot checks, create->GET persistence). Frontend: login as owner and kasir via preview URL both work; owner dashboard renders omzet/antrian/kasir/owner stat cards + profit trend; Antrian, Stok, Lainnya tabs navigate and render; kasir sees role-based UI (kasir stats visible, owner stats hidden, Stok tab hidden). Zero browser console errors. No deprecated Expo packages detected in reviewed files.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "(tabs)/_layout.tsx", "issue": "Uses expo-router/unstable-native-tabs (unstable API) for iOS 26 branch. Reference: /app/frontend/app/(tabs)/_layout.tsx:3. Web/Android unaffected."}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_smoke_restore.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": [
+    "Optional: migrate away from expo-router/unstable-native-tabs once a stable API is available (low priority, iOS 26 only)",
+    "Optional: backend/server.py is a ~3900-line monolith; consider splitting into routers for maintainability (restored code, not a regression)"
+  ],
+  "critical_code_review_comments": [
+    "backend/server.py is a single ~3900-line file containing all routes, seed logic, and integrations - exceeds the 700-line guideline but is restored legacy code, functioning correctly",
+    "Auth is solid: argon2 via pwdlib, idempotent seed with $setOnInsert, constant-time dummy-hash verify for unknown users, JWT from env vars",
+    "MongoDB _id correctly excluded from projections (e.g., /users uses {'_id': 0, 'hashed_password': 0})",
+    "Frontend uses process.env.EXPO_PUBLIC_BACKEND_URL for API base (src/api.ts) - no hardcoded URLs"
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (13/13)", "frontend": "100% (all smoke flows passed)"},
+  "seed_data_creation": "Created TEST_SMOKE Pelanggan customer via test_13 (left in DB, harmless, prefixed TEST_)",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Restored project fully works in this environment. Use pytest.ini in /app/backend/tests (xdist -n 2 --dist loadscope). Existing test suite from original workspace: test_rbac_and_sales.py, test_roles_and_export.py, test_stock_checks.py, test_iteration2_reports_backup.py, test_iteration3_new_features.py, test_import_excel.py - can be run for deeper regression. Login inputs: testID is directly on the TextInput (fill '[data-testid=\"login-username-input\"]' not the inner input). Tabs have no testIDs; use text selectors (Beranda/Antrian/Stok/Lainnya).",
+  "rca_of_issue": "No issues found. Environment restoration (deps, .env, assets) by main agent is verified working end-to-end."
+}
