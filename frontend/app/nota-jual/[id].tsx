@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import { useLocalSearchParams } from "expo-router";
-import * as Print from "expo-print";
 import React, { useState } from "react";
 import { Linking, ScrollView, Share, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -13,6 +12,7 @@ import { Button, Header, Loading, useToast } from "@/src/components/ui";
 import { fmtDateTime, MONO, rupiah } from "@/src/format";
 import { logoUri } from "@/src/shop";
 import { makeStyles } from "@/src/theme";
+import { printThermal, thermalItem, thermalRow } from "@/src/thermal";
 
 export default function NotaJual() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -31,16 +31,17 @@ export default function NotaJual() {
   const print = useMutation({
     mutationFn: async () => {
       const { sale: s, shop } = q.data;
-      const rows = s.items.map((i: any) => `<tr><td>${i.name} (${i.qty} x ${rupiah(i.price)})</td><td style="text-align:right">${rupiah(i.subtotal)}</td></tr>`).join("");
-      await Print.printAsync({ html: `<html><body style="font-family:'Courier New',monospace;font-size:12px;max-width:380px;margin:0 auto;padding:12px">
-        <div style="text-align:center"><img src="${logoUri(shop.logo_version)}" style="width:100px;height:100px;object-fit:contain"/></div>
-        <h2 style="text-align:center;margin:4px 0">${shop.name}</h2><div style="text-align:center;font-size:11px">${s.outlet_name}<br/>${shop.address}<br/>${shop.phone}</div><hr/>
-        <table style="width:100%"><tr><td>No Faktur</td><td style="text-align:right">${s.sale_no}</td></tr><tr><td>Tanggal</td><td style="text-align:right">${fmtDateTime(s.created_at)}</td></tr>
-        <tr><td>Pelanggan</td><td style="text-align:right">${s.customer_name}</td></tr>${s.customer_address ? `<tr><td>Alamat</td><td style="text-align:right">${s.customer_address}</td></tr>` : ""}<tr><td>Kasir</td><td style="text-align:right">${s.cashier}</td></tr></table><hr/>
-        <table style="width:100%">${rows}</table><hr/><table style="width:100%"><tr><td>Subtotal</td><td style="text-align:right">${rupiah(s.subtotal)}</td></tr>
-        <tr><td>Diskon</td><td style="text-align:right">- ${rupiah(s.discount)}</td></tr><tr style="font-weight:bold;font-size:14px"><td>TOTAL</td><td style="text-align:right">${rupiah(s.total)}</td></tr>
-        <tr><td>Bayar (${s.method})</td><td style="text-align:right">${rupiah(s.amount_paid)}</td></tr>${s.debt_amount ? `<tr><td>Sisa Hutang</td><td style="text-align:right">${rupiah(s.debt_amount)}${s.debt_due_date ? ` (JT ${s.debt_due_date})` : ""}</td></tr>` : `<tr><td>Kembalian</td><td style="text-align:right">${rupiah(s.change)}</td></tr>`}</table>
-        <hr/><div style="text-align:center;font-size:11px">Terima kasih telah berbelanja di ${shop.name}.</div></body></html>` });
+      const rows = s.items.map((i: any) => thermalItem(i.name + (i.discount ? ` (disc ${rupiah(i.discount)})` : ""), i.qty, rupiah(i.price), rupiah(i.subtotal))).join("");
+      await printThermal(`
+        <img class="logo" src="${logoUri(shop.logo_version)}"/>
+        <h1>${shop.name}</h1><div class="c">${s.outlet_name}<br/>${shop.address}<br/>${shop.phone}</div><div class="hr"></div>
+        <table>${thermalRow("No Faktur", s.sale_no)}${thermalRow("Tanggal", fmtDateTime(s.created_at))}${thermalRow("Pelanggan", s.customer_name)}
+        ${s.customer_address ? thermalRow("Alamat", s.customer_address) : ""}${thermalRow("Kasir", s.cashier)}</table><div class="hr"></div>
+        <div class="sec">Sparepart</div><table>${rows}</table><div class="hr"></div>
+        <table>${thermalRow("Subtotal", rupiah(s.subtotal))}${s.discount ? thermalRow("Diskon", "- " + rupiah(s.discount)) : ""}${thermalRow("TOTAL", rupiah(s.total), "tot")}
+        ${thermalRow(`Bayar (${s.method})`, rupiah(s.amount_paid))}
+        ${s.debt_amount ? thermalRow("Sisa Hutang" + (s.debt_due_date ? ` (JT ${s.debt_due_date})` : ""), rupiah(s.debt_amount)) : thermalRow("Kembalian", rupiah(s.change))}</table>
+        <div class="hr"></div><div class="c">Terima kasih telah berbelanja di ${shop.name}.</div>`);
     },
     onError: (e: any) => { if (!/cancel|dismiss/i.test(e.message ?? "")) toast.show(e.message ?? "Gagal mencetak", "error"); },
   });
@@ -76,7 +77,7 @@ export default function NotaJual() {
           <Text style={[styles.center, { marginTop: 4 }]}>Terima kasih telah berbelanja di {shop.name}.</Text>
         </View>
         <View style={{ gap: 10 }}>
-          <Button title="🖨️  Cetak Faktur" variant="dark" onPress={() => print.mutate()} loading={print.isPending} testID="sale-print-button" />
+          <Button title="🖨️  Cetak Faktur (Thermal 80mm)" variant="dark" onPress={() => print.mutate()} loading={print.isPending} testID="sale-print-button" />
           <Button title="📱  Kirim via WhatsApp" variant="success" onPress={() => wa.mutate()} loading={wa.isPending} testID="sale-whatsapp-button" />
           {user?.role === "owner" ? <Button title="Ubah Tanggal Faktur" variant="outline" icon="calendar-outline" onPress={() => setDateOpen(true)} testID="sale-edit-date-button" /> : null}
         </View>

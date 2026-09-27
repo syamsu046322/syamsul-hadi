@@ -1,7 +1,8 @@
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { useRouter } from "expo-router";
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Modal, Pressable, ScrollView, Text, TextInput, TextInputProps, useWindowDimensions, View, ViewStyle } from "react-native";
+import { ActivityIndicator, Modal, Platform, Pressable, ScrollView, Text, TextInput, TextInputProps, useWindowDimensions, View, ViewStyle } from "react-native";
+import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { MONO } from "@/src/format";
@@ -186,12 +187,12 @@ export function Sheet({ visible, onClose, title, children, testID, scroll = true
   const { colors } = useTheme();
   const { height } = useWindowDimensions();
   const maxH = Math.round(height * 0.9) - insets.bottom - insets.top;
-  const bodyMax = maxH - 96;
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={styles.sheetBackdrop}>
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent>
+      {/* Sheet ikut naik saat keyboard muncul: daftar hasil pencarian & input selalu tampil di atas keyboard */}
+      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} keyboardVerticalOffset={16} style={styles.sheetBackdrop}>
         <Pressable style={{ flex: 1 }} onPress={onClose} testID={`${testID ?? "sheet"}-backdrop`} />
-        <View style={[styles.sheet, { paddingBottom: insets.bottom + 16, maxHeight: maxH }]} testID={testID}>
+        <View style={[styles.sheet, { paddingBottom: insets.bottom + 16, maxHeight: maxH, flexShrink: 1 }]} testID={testID}>
           <View style={styles.sheetHead}>
             <Text style={styles.sheetTitle}>{title}</Text>
             <Pressable onPress={onClose} hitSlop={10} testID={`${testID ?? "sheet"}-close`}>
@@ -199,12 +200,12 @@ export function Sheet({ visible, onClose, title, children, testID, scroll = true
             </Pressable>
           </View>
           {scroll ? (
-            <ScrollView keyboardShouldPersistTaps="handled" style={{ maxHeight: bodyMax, flexGrow: 0 }} contentContainerStyle={{ paddingBottom: 24 }} showsVerticalScrollIndicator>
+            <ScrollView keyboardShouldPersistTaps="handled" keyboardDismissMode="none" style={{ flexGrow: 0, flexShrink: 1 }} contentContainerStyle={{ paddingBottom: 24 }} showsVerticalScrollIndicator>
               {children}
             </ScrollView>
           ) : children}
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }

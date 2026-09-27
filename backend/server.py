@@ -228,8 +228,31 @@ async def lifespan(_: FastAPI):
     await db.service_transactions.create_index([("created_at", -1)])
     await db.service_items.create_index("transaction_id")
     await seed()
+    await purge_cancelled_finance()
     yield
     client.close()
+
+
+# Filter pembayaran yang masih berlaku (faktur DIBATALKAN dikecualikan dari semua laporan keuangan)
+PAY_ACTIVE: dict[str, Any] = {"cancelled": {"$ne": True}}
+
+
+async def exclude_cancelled_finance(trx_ids: list[str]):
+    """Tandai pembayaran/cicilan sebagai batal & hapus dari histori/piutang agar tidak masuk omset, modal, dan laporan apapun."""
+    if not trx_ids:
+        return
+    ts = iso(now())
+    flt = {"transaction_id": {"$in": trx_ids}}
+    await db.payments.update_many({**flt, "cancelled": {"$ne": True}}, {"$set": {"cancelled": True, "cancelled_at": ts}})
+    await db.debt_payments.update_many({**flt, "cancelled": {"$ne": True}}, {"$set": {"cancelled": True, "cancelled_at": ts}})
+    await db.service_history.delete_many(flt)
+    await db.service_transactions.update_many({"id": {"$in": trx_ids}, "debt_status": {"$ne": None}}, {"$set": {"debt_amount": 0, "debt_status": None}})
+
+
+async def purge_cancelled_finance():
+    """Migrasi sekali jalan saat start: faktur yang sudah DIBATALKAN sebelumnya ikut dikecualikan."""
+    ids = [t["id"] async for t in db.service_transactions.find({"status": "DIBATALKAN"}, {"id": 1})]
+    await exclude_cancelled_finance(ids)
 
 
 async def seed():
@@ -1250,7 +1273,7 @@ async def list_debts(_: KasirUser, status: str = "BELUM LUNAS"):
     flt: dict[str, Any] = {"debt_status": {"$ne": None}, "deleted_at": None}
     if status:
         flt["debt_status"] = status
-    docs = await db.service_transactions.find(flt, {"_id": 0}).sort("paid_at", -1).to_list(500)
+    docs = await db.service_transactions.find({**flt, "status": {"$ne": "DIBATALKAN"}}, {"_id": 0}).sort("paid_at", -1).to_list(500)
     for d in docs:
         due = parse_date(d.get("debt_due_date") or "")
         d["overdue"] = bool(due and due < today and d.get("debt_status") == "BELUM LUNAS")
@@ -1281,16 +1304,42 @@ async def mark_printed(tid: str, user: KasirUser):
     return await build_detail(await get_trx(tid))
 
 
+def rp(n) -> str:
+    return f"Rp {int(n or 0):,}".replace(",", ".")
+
+
 def wa_message(d: dict, shop: dict) -> str:
     inv = d.get("invoice") or {}
     dt = (d.get("paid_at") or d["created_at"])[:10]
     y, m, dd = dt.split("-")
     name = shop["name"]
-    return (f"Terima kasih telah melakukan servis di {name}.\n\n"
-            f"No Nota: {inv.get('invoice_no', d['trx_no'])}\nTanggal: {dd}/{m}/{y}\nPelanggan: {d['customer_name']}\n"
-            f"Motor: {d.get('vehicle_name') or '-'}\nNo Polisi: {d['plate']}\nTotal: Rp {d['totals']['total']:,}".replace(",", ".") +
-            (f"\nSisa hutang: Rp {d.get('debt_amount', 0):,}".replace(",", ".") + (f" (jatuh tempo {d.get('debt_due_date')})" if d.get("debt_due_date") else "") if d.get("debt_amount") else "") +
-            f"\n\nTerima kasih telah mempercayakan perawatan motor Anda kepada {name}.")
+    ok = [i for i in d.get("items", []) if i.get("approval") == "DISETUJUI"]
+    jasa = [i for i in ok if i["kind"] == "jasa"]
+    parts = [i for i in ok if i["kind"] == "part"]
+    line = lambda i: f"- {i['name']} {i['qty']} x {rp(i['price'])} = {rp(i['subtotal'])}"  # noqa: E731
+    t = d["totals"]
+    pay = d.get("payment") or {}
+    lines = [f"Terima kasih telah melakukan servis di {name}.", "",
+             f"No Nota: {inv.get('invoice_no', d['trx_no'])}", f"Tanggal: {dd}/{m}/{y}", f"Pelanggan: {d['customer_name']}",
+             f"Motor: {d.get('vehicle_name') or '-'}", f"No Polisi: {d['plate']}", f"Mekanik: {d.get('mechanic_name') or '-'}", ""]
+    if jasa:
+        lines += ["*JASA / PEKERJAAN:*", *[line(i) for i in jasa], f"Total Jasa: {rp(sum(i['subtotal'] for i in jasa))}", ""]
+    if parts:
+        lines += ["*SPAREPART:*", *[line(i) for i in parts], f"Total Sparepart: {rp(sum(i['subtotal'] for i in parts))}", ""]
+    lines.append(f"Subtotal: {rp(t['subtotal'])}")
+    if t.get("discount"):
+        lines.append(f"Diskon: -{rp(t['discount'])}")
+    lines.append(f"*TOTAL AKHIR: {rp(t['total'])}*")
+    if pay:
+        lines.append(f"Bayar ({pay.get('method', '-')}): {rp(pay.get('amount_paid'))}")
+        if pay.get("method") == "CASH" and pay.get("change"):
+            lines.append(f"Kembalian: {rp(pay.get('change'))}")
+    if d.get("debt_amount"):
+        lines.append(f"Sisa hutang: {rp(d.get('debt_amount'))}" + (f" (jatuh tempo {d.get('debt_due_date')})" if d.get("debt_due_date") else ""))
+    if d.get("next_recommendation"):
+        lines += ["", f"Rekomendasi servis berikutnya: {d['next_recommendation']}" + (f" (KM {d['next_km']})" if d.get("next_km") else "")]
+    lines += ["", f"Terima kasih telah mempercayakan perawatan motor Anda kepada {name}."]
+    return "\n".join(lines)
 
 
 @api.post("/transactions/{tid}/whatsapp")
@@ -1338,6 +1387,8 @@ async def cancel(tid: str, body: CancelIn, user: RegistrarUser):
                 await apply_stock_delta(i["ref_id"], i["qty"], "PEMBATALAN", trx, user)
     await set_status(tid, "DIBATALKAN", user, f"Dibatalkan: {body.reason}",
                      {"cancel_reason": body.reason, "cancelled_by": user["name"], "cancelled_at": iso(now()), "was_paid": was_paid, "status_before_cancel": trx["status"]})
+    # Faktur batal tidak boleh masuk omset / modal / piutang / catatan keuangan apapun
+    await exclude_cancelled_finance([tid])
     return await build_detail(await get_trx(tid))
 
 
@@ -1379,18 +1430,18 @@ async def dashboard(user: CurrentUser):
     today = wib_today()
     trx_today = await db.service_transactions.find({"date": today, "deleted_at": None}, {"_id": 0}).to_list(1000)
     count = lambda *st: sum(1 for t in trx_today if t["status"] in st)  # noqa: E731
-    pays = await db.payments.find({"date": today}, {"_id": 0}).to_list(1000)
+    pays = await db.payments.find({"date": today, **PAY_ACTIVE}, {"_id": 0}).to_list(1000)
     paid_ids = [p["transaction_id"] for p in pays]
     items = await db.service_items.find({"transaction_id": {"$in": paid_ids}, "deleted_at": None, "approval": "DISETUJUI"}, {"_id": 0}).to_list(5000)
     by_method: dict[str, int] = {}
     for p in pays:
         by_method[p["method"]] = by_method.get(p["method"], 0) + p["total"]
     month_prefix = today[:6]
-    month_pays = await db.payments.find({"date": {"$regex": f"^{month_prefix}"}}, {"_id": 0, "total": 1}).to_list(10000)
+    month_pays = await db.payments.find({"date": {"$regex": f"^{month_prefix}"}, **PAY_ACTIVE}, {"_id": 0, "total": 1}).to_list(10000)
     low_stock = await db.parts.count_documents({"deleted_at": None, "$expr": {"$lte": ["$stock", "$min_stock"]}})
     unread = await unread_count(user)
     tools_status = await tools_due_status(user) if user["role"] in ("mekanik", "owner") else None
-    debts = await db.service_transactions.find({"debt_status": "BELUM LUNAS"}, {"_id": 0, "debt_amount": 1}).to_list(1000)
+    debts = await db.service_transactions.find({"debt_status": "BELUM LUNAS", "status": {"$ne": "DIBATALKAN"}}, {"_id": 0, "debt_amount": 1}).to_list(1000)
     reminders_due = len([r for r in await compute_reminders() if r["status"] in ("TERLAMBAT", "SEGERA")])
     last_backup = await db.meta.find_one({"_id": "last_backup"}) or {}
     perf_pipe = [{"$match": {"date": today, "status": {"$in": ["MENUNGGU_KASIR", "MENUNGGU_PEMBAYARAN", *STATUS_PAID]}}},
@@ -1415,7 +1466,7 @@ async def dashboard(user: CurrentUser):
 
 @api.get("/reports/omzet")
 async def report_omzet(_: OwnerUser, mode: Literal["daily", "monthly"] = "daily"):
-    pays = await db.payments.find({}, {"_id": 0}).to_list(50000)
+    pays = await db.payments.find(PAY_ACTIVE, {"_id": 0}).to_list(50000)
     ids = [p["transaction_id"] for p in pays]
     items = await db.service_items.find({"transaction_id": {"$in": ids}, "deleted_at": None, "approval": "DISETUJUI"}, {"_id": 0}).to_list(100000)
     jasa: dict[str, int] = {}
@@ -1469,7 +1520,7 @@ async def profit_trend(_: OwnerUser):
         return monthly.setdefault(k, {"period": k, "part_profit": 0, "service_part_profit": 0, "sales_profit": 0, "part_omzet": 0})
 
     # servis: pakai tanggal bayar (paid_at)
-    for p in await db.payments.find({"sale": {"$ne": True}}, {"_id": 0, "transaction_id": 1, "paid_at": 1}).to_list(100000):
+    for p in await db.payments.find({"sale": {"$ne": True}, **PAY_ACTIVE}, {"_id": 0, "transaction_id": 1, "paid_at": 1}).to_list(100000):
         tid = p.get("transaction_id")
         if tid not in svc_part_profit and tid not in svc_part_omzet:
             continue
@@ -1997,7 +2048,7 @@ async def expense_summary(_: KasirUser, month: str = ""):
         key = r["group"] if r["group"] != "LAINNYA" else ("LAINNYA_IN" if r.get("flow") == "IN" else "LAINNYA_OUT")
         by_group[key] = by_group.get(key, 0) + r["amount"]
         by_cat[f"{r['group']}: {r['category']}"] = by_cat.get(f"{r['group']}: {r['category']}", 0) + r["amount"]
-    pays = await db.payments.find({"date": {"$regex": f"^{month.replace('-', '')}"}}, {"_id": 0, "total": 1}).to_list(10000)
+    pays = await db.payments.find({"date": {"$regex": f"^{month.replace('-', '')}"}, **PAY_ACTIVE}, {"_id": 0, "total": 1}).to_list(10000)
     omzet = sum(p["total"] for p in pays)
     return {"month": month, "omzet": omzet, "belanja_bengkel": by_group["BENGKEL"], "laba_bersih": omzet - by_group["BENGKEL"],
             "kasbon_owner": by_group["KELUARGA"], "pinjaman_masuk": by_group["LAINNYA_IN"], "uang_dipinjam_keluar": by_group["LAINNYA_OUT"],
@@ -2092,7 +2143,7 @@ async def create_checklist(body: ChecklistIn, user: MekanikUser):
 @api.get("/reports/mechanics")
 async def report_mechanics(_: OwnerUser, month: str = ""):
     month = month or now().astimezone(timezone(timedelta(hours=7))).strftime("%Y-%m")
-    pays = await db.payments.find({"date": {"$regex": f"^{month.replace('-', '')}"}}, {"_id": 0}).to_list(20000)
+    pays = await db.payments.find({"date": {"$regex": f"^{month.replace('-', '')}"}, **PAY_ACTIVE}, {"_id": 0}).to_list(20000)
     ids = [p["transaction_id"] for p in pays]
     trxs = {t["id"]: t for t in await db.service_transactions.find({"id": {"$in": ids}}, {"_id": 0}).to_list(20000)}
     items = await db.service_items.find({"transaction_id": {"$in": ids}, "deleted_at": None, "approval": "DISETUJUI"}, {"_id": 0}).to_list(100000)
@@ -2186,10 +2237,12 @@ async def export_report(_: OwnerUser, mode: Literal["daily", "monthly"] = "daily
                sum(r["diskon"] for r in rep["rows"]), rep["grand_total"]])
     ws2 = wb.create_sheet("Rincian Transaksi")
     ws2.append(["Tanggal Bayar", "No Nota", "No Transaksi", "Pelanggan", "No Polisi", "Mekanik", "Metode", "Total", "Dibayar", "Sisa Hutang", "Kasir"])
-    pays = await db.payments.find({}, {"_id": 0}).sort("paid_at", -1).to_list(50000)
+    pays = await db.payments.find(PAY_ACTIVE, {"_id": 0}).sort("paid_at", -1).to_list(50000)
     trxs = {t["id"]: t for t in await db.service_transactions.find({"id": {"$in": [p["transaction_id"] for p in pays]}}, {"_id": 0}).to_list(50000)}
     for p in pays:
         t = trxs.get(p["transaction_id"], {})
+        if t.get("status") == "DIBATALKAN":
+            continue
         ws2.append([p["paid_at"][:19].replace("T", " "), t.get("invoice_no", ""), t.get("trx_no", ""), t.get("customer_name", ""), t.get("plate", ""),
                     t.get("mechanic_name", ""), p["method"], p["total"], p["amount_paid"], t.get("debt_amount", 0) or 0, p.get("cashier", "")])
     buf = io.BytesIO()
@@ -2437,9 +2490,15 @@ async def sale_whatsapp(sid: str, user: SalesUser):
         raise HTTPException(status_code=404, detail="Faktur tidak ditemukan")
     shop = await get_shop()
     from urllib.parse import quote
-    lines = "\n".join(f"- {i['name']} x{i['qty']} = Rp {i['subtotal']:,}".replace(",", ".") for i in s["items"])
+    lines = "\n".join(f"- {i['name']} {i['qty']} x {rp(i['price'])}" + (f" (disc {rp(i['discount'])})" if i.get("discount") else "") + f" = {rp(i['subtotal'])}" for i in s["items"])
+    pay_line = f"Bayar ({s.get('method', '-')}): {rp(s.get('amount_paid'))}"
+    if s.get("debt_amount"):
+        pay_line += f"\nSisa hutang: {rp(s['debt_amount'])}" + (f" (jatuh tempo {s['debt_due_date']})" if s.get("debt_due_date") else "")
+    elif s.get("method") == "CASH" and s.get("change"):
+        pay_line += f"\nKembalian: {rp(s['change'])}"
     msg = (f"Terima kasih telah berbelanja di {shop['name']} ({s['outlet_name']}).\n\nNo Faktur: {s['sale_no']}\nTanggal: {ymd_display(s['date'])}\n"
-           f"Pelanggan: {s['customer_name']}\n{lines}\nTotal: Rp {s['total']:,}".replace(",", ".") + f"\n\nTerima kasih!")
+           f"Pelanggan: {s['customer_name']}\n\n*SPAREPART:*\n{lines}\n\nSubtotal: {rp(s.get('subtotal'))}"
+           + (f"\nDiskon: -{rp(s['discount'])}" if s.get("discount") else "") + f"\n*TOTAL AKHIR: {rp(s['total'])}*\n{pay_line}\n\nTerima kasih!")
     phone = wa_phone(s.get("customer_phone", ""))
     await db.whatsapp_logs.insert_one({"id": new_id(), "kind": "SALE", "sale_id": sid, "phone": phone, "message": msg, "status": "TERKIRIM" if phone else "GAGAL", "sent_by": user["username"], "created_at": iso(now())})
     return {"status": "TERKIRIM" if phone else "GAGAL", "message": msg, "url": f"https://wa.me/{phone}?text={quote(msg)}" if phone else None}
@@ -2603,6 +2662,85 @@ async def build_direct_sales(month: str, dfrom: str = "", dto: str = "") -> dict
 @api.get("/reports/direct-sales")
 async def report_direct_sales(_: OwnerUser, month: str = "", date_from: str = "", date_to: str = ""):
     return await build_direct_sales(month_or_now(month), date_from, date_to)
+
+
+# --------------------------------------------------------------------------- laporan modal & penjualan (harga beli vs harga jual vs profit)
+
+@api.get("/reports/profit")
+async def report_profit(_: OwnerUser, mode: Literal["daily", "monthly", "yearly"] = "daily", period: str = ""):
+    """Rekap modal part (harga beli), harga jual, dan profit. Faktur DIBATALKAN dikecualikan.
+    mode=daily  → period YYYY-MM (default bulan ini), baris per hari
+    mode=monthly→ period YYYY (default tahun ini), baris per bulan
+    mode=yearly → semua tahun, baris per tahun"""
+    wib_now = now().astimezone(timezone(timedelta(hours=7)))
+    if mode == "daily":
+        period = (period or wib_now.strftime("%Y-%m")).replace("-", "")[:6]
+        date_flt: dict = {"$regex": f"^{period}"}
+        key_len = 8
+    elif mode == "monthly":
+        period = (period or wib_now.strftime("%Y"))[:4]
+        date_flt = {"$regex": f"^{period}"}
+        key_len = 6
+    else:
+        period = ""
+        date_flt = {"$regex": "^\\d{8}$"}
+        key_len = 4
+
+    def bucket_key(ymd: str) -> str:
+        s = str(ymd or "")[:key_len]
+        return f"{s[:4]}-{s[4:6]}-{s[6:8]}" if key_len == 8 else (f"{s[:4]}-{s[4:6]}" if key_len == 6 else s)
+
+    buckets: dict[str, dict] = {}
+
+    def bucket(k: str) -> dict:
+        return buckets.setdefault(k, {"period": k, "modal": 0, "jual_part": 0, "jasa": 0, "diskon": 0, "omzet": 0,
+                                      "profit_part": 0, "profit": 0, "count_servis": 0, "count_jual": 0})
+
+    # 1) Servis yang sudah dibayar (status DIBATALKAN otomatis tidak termasuk STATUS_PAID)
+    trxs = await db.service_transactions.find({"date": date_flt, "status": {"$in": STATUS_PAID}, "deleted_at": None}, {"_id": 0, "id": 1, "date": 1, "discount": 1}).to_list(50000)
+    ids = [t["id"] for t in trxs]
+    items = await db.service_items.find({"transaction_id": {"$in": ids}, "deleted_at": None, "approval": "DISETUJUI"}, {"_id": 0}).to_list(200000)
+    ref_ids = list({i.get("ref_id") for i in items if i["kind"] == "part" and i.get("ref_id")})
+    codes = list({i.get("code") for i in items if i["kind"] == "part" and i.get("code")})
+    cost_by_id = {p["id"]: int(p.get("cost", 0) or 0) for p in await db.parts.find({"id": {"$in": ref_ids}}, {"_id": 0, "id": 1, "cost": 1}).to_list(200000)}
+    cost_by_code = {p["code"]: int(p.get("cost", 0) or 0) for p in await db.parts.find({"code": {"$in": codes}}, {"_id": 0, "code": 1, "cost": 1}).to_list(200000)}
+    by_trx: dict[str, dict] = {}
+    for i in items:
+        b = by_trx.setdefault(i["transaction_id"], {"modal": 0, "jual_part": 0, "jasa": 0})
+        if i["kind"] == "part":
+            cost = int(i.get("cost") or 0) or cost_by_id.get(i.get("ref_id"), 0) or cost_by_code.get(i.get("code"), 0)
+            b["modal"] += cost * i["qty"]
+            b["jual_part"] += i["subtotal"]
+        else:
+            b["jasa"] += i["subtotal"]
+    for t in trxs:
+        s = by_trx.get(t["id"], {"modal": 0, "jual_part": 0, "jasa": 0})
+        disc = int(t.get("discount", 0) or 0)
+        b = bucket(bucket_key(t["date"]))
+        b["modal"] += s["modal"]
+        b["jual_part"] += s["jual_part"]
+        b["jasa"] += s["jasa"]
+        b["diskon"] += disc
+        b["count_servis"] += 1
+
+    # 2) Jualan langsung
+    async for s in db.sales.find({"date": date_flt, "deleted_at": None, "status": {"$ne": "DIBATALKAN"}}, {"_id": 0, "date": 1, "items": 1, "discount": 1, "total_cost": 1}):
+        b = bucket(bucket_key(s["date"]))
+        b["modal"] += int(s.get("total_cost", 0) or 0)
+        b["jual_part"] += sum(int(i.get("subtotal", 0) or 0) for i in s.get("items", []))
+        b["diskon"] += int(s.get("discount", 0) or 0)
+        b["count_jual"] += 1
+
+    for b in buckets.values():
+        b["omzet"] = max(b["jual_part"] + b["jasa"] - b["diskon"], 0)
+        b["profit_part"] = b["jual_part"] - b["modal"]
+        b["profit"] = b["omzet"] - b["modal"]
+    rows = sorted(buckets.values(), key=lambda r: r["period"], reverse=True)
+    tot = lambda k: sum(r[k] for r in rows)  # noqa: E731
+    return {"mode": mode, "period": period, "rows": rows,
+            "total_modal": tot("modal"), "total_jual_part": tot("jual_part"), "total_jasa": tot("jasa"), "total_diskon": tot("diskon"),
+            "total_omzet": tot("omzet"), "total_profit_part": tot("profit_part"), "total_profit": tot("profit"),
+            "count_servis": tot("count_servis"), "count_jual": tot("count_jual")}
 
 
 async def build_purchases(month: str, dfrom: str = "", dto: str = "") -> dict:

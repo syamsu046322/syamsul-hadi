@@ -20,3 +20,11 @@
 - backend/.env dilengkapi: JWT_SECRET, JWT_EXPIRE_MINUTES=10080, EMERGENT_LLM_KEY, INTEGRATION_PROXY_URL.
 - Smoke test (testing agent): 13/13 backend pytest passed, 21 endpoint owner 200 OK, RBAC valid; frontend login owner & kasir + semua tab render tanpa error. Laporan: /app/test_reports/iteration_1.json.
 - Kredensial uji: /app/memory/test_credentials.md (owner/owner123, kasir/kasir123, mekanik/mekanik123, partman/partman123).
+
+## Implemented (2026-09-27) — Iterasi 2: pembatalan faktur, laporan modal, WA rinci, keyboard, thermal 80mm
+- Pembatalan faktur: `exclude_cancelled_finance()` menandai payments/debt_payments `cancelled=True`, hapus service_history, nolkan hutang; filter `PAY_ACTIVE` dipakai di dashboard, /reports/omzet, profit-trend, expenses/summary, reports/mechanics, export omzet; /debts & piutang dashboard exclude DIBATALKAN. Migrasi sekali jalan saat startup (`purge_cancelled_finance`) untuk faktur batal lama.
+- Laporan Modal & Penjualan: GET /reports/profit?mode=daily|monthly|yearly&period= (modal part=harga beli×qty, harga jual part, profit part, jasa, diskon, laba kotor; servis lunas + jualan langsung). Screen /laporan-modal (link dari /laporan).
+- Nota WA (servis & jualan): rincian JASA/SPAREPART per item (qty x harga = subtotal), subtotal, diskon, TOTAL AKHIR, bayar/kembalian/sisa hutang, rekomendasi.
+- Sheet (ui.tsx) dibungkus KeyboardAvoidingView (react-native-keyboard-controller) → daftar hasil pencarian part tampil di atas keyboard.
+- Cetak nota/faktur: format thermal 80mm (src/thermal.ts: @page 80mm, body 72mm, item 2 baris; iOS width 226pt).
+- Tes: tests/test_cancel_profit_wa.py (3) + tests/test_iteration2_cancel_profit_wa_ext.py (5) PASS. Laporan: /app/test_reports/iteration_2.json

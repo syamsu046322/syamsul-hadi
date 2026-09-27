@@ -70,6 +70,7 @@ export default function Laporan() {
           <Button title="Belanja & Laba" variant="outline" icon="cart-outline" small onPress={() => router.push("/belanja")} style={{ flex: 1 }} testID="open-expenses-button" />
         </View>
         <SectionTitle title="Laporan Rinci" />
+        <Button title="Laporan Modal & Penjualan (Harga Beli · Harga Jual · Profit)" variant="primary" icon="stats-chart-outline" small onPress={() => router.push("/laporan-modal")} style={{ marginBottom: 8 }} testID="open-profit-report-button" />
         <View style={{ flexDirection: "row", gap: 8, marginBottom: 8 }}>
           <Button title="Penjualan Servis" variant="dark" icon="receipt-outline" small onPress={() => router.push("/laporan-penjualan")} style={{ flex: 1 }} testID="open-service-sales-button" />
           <Button title="Jualan Langsung" variant="dark" icon="pricetags-outline" small onPress={() => router.push("/laporan-penjualan?tab=jual")} style={{ flex: 1 }} testID="open-direct-sales-button" />

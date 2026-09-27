@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import * as Print from "expo-print";
 import React from "react";
 import { Linking, Platform, ScrollView, Share, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -12,20 +11,17 @@ import { Button, Header, Loading, useToast } from "@/src/components/ui";
 import { fmtDateTime, MONO, rupiah } from "@/src/format";
 import { logoUri } from "@/src/shop";
 import { makeStyles } from "@/src/theme";
+import { printThermal, thermalItem, thermalRow } from "@/src/thermal";
 
-function receiptHtml(shop: any, d: any): string {
-  const row = (l: string, r: string) => `<tr><td>${l}</td><td style="text-align:right">${r}</td></tr>`;
-  const items = (arr: any[]) => arr.map((i) => row(`${i.name} (${i.qty} x ${rupiah(i.price)})`, rupiah(i.subtotal))).join("");
+/** Isi nota servis untuk kertas thermal 80mm. */
+function receiptBody(shop: any, d: any): string {
+  const row = thermalRow;
+  const items = (arr: any[]) => arr.map((i) => thermalItem(i.name, i.qty, rupiah(i.price), rupiah(i.subtotal))).join("");
   const ok = d.items.filter((i: any) => i.approval === "DISETUJUI");
   const est = ok.filter((i: any) => i.source === "ESTIMASI");
   const add = ok.filter((i: any) => i.source === "TAMBAHAN");
-  return `<html><head><meta charset="utf-8"><style>
-    body{font-family:'Courier New',monospace;font-size:12px;max-width:380px;margin:0 auto;padding:12px;color:#111}
-    h1{font-size:18px;margin:0;text-align:center;letter-spacing:2px} .c{text-align:center;font-size:11px}
-    table{width:100%;border-collapse:collapse} td{padding:2px 0;vertical-align:top} .hr{border-top:2px dashed #111;margin:8px 0}
-    .tot td{font-weight:bold;font-size:14px} .sec{font-weight:bold;margin-top:6px;text-transform:uppercase}
-  </style></head><body>
-    <div style="text-align:center;margin-bottom:6px"><img src="${logoUri(shop.logo_version)}" style="width:110px;height:110px;object-fit:contain"/></div>
+  return `
+    <img class="logo" src="${logoUri(shop.logo_version)}"/>
     <h1>${shop.name}</h1><div class="c">${shop.address}<br/>${shop.phone}</div><div class="hr"></div>
     <table>${row("No Nota", d.invoice?.invoice_no ?? d.trx_no)}${row("Tanggal", fmtDateTime(d.paid_at))}${row("Antrian", d.queue_no)}
     ${row("Pelanggan", d.customer_name)}${row("No HP", d.customer_phone || "-")}${row("Motor", d.vehicle_name || "-")}${row("No Polisi", d.plate)}
@@ -33,14 +29,13 @@ function receiptHtml(shop: any, d: any): string {
     <div class="sec">Keluhan</div><div>${d.complaint_main}</div><div class="hr"></div>
     <div class="sec">Jasa & Sparepart</div><table>${items(est)}</table>
     ${add.length ? `<div class="sec">Tambahan</div><table>${items(add)}</table>` : ""}<div class="hr"></div>
-    <table>${row("Subtotal", rupiah(d.totals.subtotal))}${row("Diskon", "- " + rupiah(d.totals.discount))}
-    <tr class="tot"><td>TOTAL</td><td style="text-align:right">${rupiah(d.totals.total)}</td></tr>
-    ${row("Pembayaran (" + (d.payment?.method ?? "-") + ")", rupiah(d.payment?.amount_paid))}${d.payment?.method === "CASH" ? row("Kembalian", rupiah(d.payment?.change)) : ""}
+    <table>${row("Subtotal", rupiah(d.totals.subtotal))}${d.totals.discount ? row("Diskon", "- " + rupiah(d.totals.discount)) : ""}
+    ${row("TOTAL", rupiah(d.totals.total), "tot")}
+    ${row("Bayar (" + (d.payment?.method ?? "-") + ")", rupiah(d.payment?.amount_paid))}${d.payment?.method === "CASH" ? row("Kembalian", rupiah(d.payment?.change)) : ""}
     ${d.debt_status ? row("Sisa Hutang" + (d.debt_due_date ? " (jt " + d.debt_due_date + ")" : ""), d.debt_status === "LUNAS" ? "LUNAS" : rupiah(d.debt_amount)) : ""}</table><div class="hr"></div>
     ${d.mechanic_note ? `<div><b>Catatan:</b> ${d.mechanic_note}</div>` : ""}
-    ${d.next_recommendation ? `<div><b>Rekomendasi berikutnya:</b> ${d.next_recommendation}${d.next_km ? " (KM " + d.next_km + ")" : ""}${d.next_date ? " · " + d.next_date : ""}</div>` : ""}
-    <div class="hr"></div><div class="c">Terima kasih telah mempercayakan perawatan motor Anda kepada Klinik Suel Motor.</div>
-  </body></html>`;
+    ${d.next_recommendation ? `<div><b>Rekomendasi:</b> ${d.next_recommendation}${d.next_km ? " (KM " + d.next_km + ")" : ""}${d.next_date ? " · " + d.next_date : ""}</div>` : ""}
+    <div class="hr"></div><div class="c">Terima kasih telah mempercayakan perawatan motor Anda kepada ${shop.name}.</div>`;
 }
 
 export default function Nota() {
@@ -56,8 +51,7 @@ export default function Nota() {
 
   const print = useMutation({
     mutationFn: async () => {
-      const html = receiptHtml(q.data.shop, q.data.detail);
-      await Print.printAsync({ html });
+      await printThermal(receiptBody(q.data.shop, q.data.detail));
       await api(`/transactions/${id}/print`, { method: "POST", body: {} });
     },
     onSuccess: () => { invalidate(); toast.show("Nota dicetak", "success"); },
@@ -130,7 +124,7 @@ export default function Nota() {
         <Text style={styles.waStatus} testID="whatsapp-status">Status WhatsApp: {waStatus}{d.whatsapp_logs?.[0] ? ` · ${fmtDateTime(d.whatsapp_logs[0].created_at)}` : ""}</Text>
         {can("kasir") ? (
           <View style={{ gap: 10 }}>
-            <Button title="🖨️  Cetak Nota (Thermal / A4)" variant="dark" onPress={() => print.mutate()} loading={print.isPending} testID="print-receipt-button" style={{ minHeight: 56 }} />
+            <Button title="🖨️  Cetak Nota (Thermal 80mm)" variant="dark" onPress={() => print.mutate()} loading={print.isPending} testID="print-receipt-button" style={{ minHeight: 56 }} />
             <Button title="📱  Kirim Nota via WhatsApp" variant="success" onPress={() => wa.mutate()} loading={wa.isPending} testID="send-whatsapp-button" style={{ minHeight: 56 }} />
             {d.status !== "SELESAI" ? <Button title="Selesaikan Transaksi" variant="primary" icon="checkmark-circle" onPress={() => done.mutate()} loading={done.isPending} testID="complete-transaction-button" style={{ minHeight: 56 }} /> : (
               <View style={styles.doneBox}><Text style={styles.doneTxt}>TRANSAKSI SELESAI ✓</Text></View>
