@@ -10,11 +10,11 @@ import { useTheme } from "@/src/theme";
 const isIOS26 = Platform.OS === "ios" && parseInt(String(Platform.Version), 10) >= 26;
 
 export default function TabsLayout() {
-  const { user, loading, can } = useAuth();
+  const { user, loading, canFeature } = useAuth();
   const { colors } = useTheme();
   if (!loading && !user) return <Redirect href="/login" />;
-  const showStok = can("partman", "mekanik");
-  const showAntrian = can("kasir", "mekanik");
+  const showStok = canFeature("stok");
+  const showAntrian = canFeature("antrian");
 
   if (isIOS26) {
     return (

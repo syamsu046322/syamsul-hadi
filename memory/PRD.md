@@ -34,3 +34,11 @@
 - POST /admin/reset-trial-data (owner + password owner): hapus service_transactions/items/complaints/estimations/additional_items, work_orders, payments, invoices, debt_payments, service_history, status_logs, whatsapp_logs, audit_logs, sales, stock_movements, stock_checks(+items), outlet_stocks, expenses, tool_checklists, customers, vehicles, notifications, counters; stok part reset 0. Master tetap: users, parts, services, outlets, tools, settings, meta.
 - UI: tab Lainnya (owner) → "Hapus Data Percobaan" → sheet password owner (testID menu-reset-trial-data, reset-trial-password-input, reset-trial-confirm-button).
 - Tes: tests/test_rack_sort_reset.py 4/4 PASS.
+
+## Implemented (2026-06) — Iterasi 5: Penggajian Karyawan (owner-only)
+- Data karyawan + gaji pokok: users kini punya `base_salary` (Pengguna → input "Gaji pokok / bulan"; owner draw diatur terpisah di Penggajian). UserCreate/UserUpdate + create_user diperbarui.
+- Hak akses per jabatan (visibilitas MENU): db.settings id="permissions" {roles:{kasir,mekanik,partman:[feature_keys]}}. GET/PUT /permissions (owner). Katalog PERMISSION_FEATURES 14 fitur. Default menyamai perilaku lama. /auth/login & /auth/me mengembalikan `permissions` efektif; owner selalu semua. Frontend: auth.canFeature(key); tab (antrian/stok) & menu lainnya.tsx digate via canFeature. Layar owner /hak-akses (checklist per jabatan).
+- Penggajian: db.settings id="payroll" {bonus_per_unit, owner_draw}. GET/PUT /payroll/settings (owner). Bonus mekanik = jumlah nota servis LUNAS bulan berjalan (PAY_ACTIVE, DIBATALKAN dikecualikan, group by mechanic_id) × bonus_per_unit. Kasir/partman gaji pokok saja. Owner = owner_draw.
+- GET /payroll/report?month= (rekap semua karyawan; total_base/total_bonus/grand_total). GET /payroll/slip/{uid}?month= (slip: nama, jabatan, periode, gaji pokok, rincian bonus + daftar unit utk mekanik, total). Layar owner /penggajian (chips bulan + sheet pengaturan) & /slip-gaji/[id] (cetak thermal via printThermal).
+- Semua endpoint & menu penggajian owner-only (OwnerUser + user?.role === "owner"); tidak tampil di login mekanik/kasir/partman.
+- Tes: tests/test_payroll.py 9/9 PASS.

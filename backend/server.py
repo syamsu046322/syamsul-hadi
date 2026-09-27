@@ -21,7 +21,7 @@ from jwt.exceptions import InvalidTokenError
 from motor.motor_asyncio import AsyncIOMotorClient
 from openpyxl import Workbook, load_workbook
 from pwdlib import PasswordHash
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from starlette.middleware.cors import CORSMiddleware
 
 ROOT_DIR = Path(__file__).parent
@@ -38,6 +38,33 @@ JWT_EXPIRE_MINUTES = int(os.environ["JWT_EXPIRE_MINUTES"])
 ALGORITHM = "HS256"
 Role = Literal["owner", "kasir", "mekanik", "partman"]
 ALL_ROLES: tuple[str, ...] = ("owner", "kasir", "mekanik", "partman")
+
+# --- Hak akses fitur/menu yang bisa diatur owner per jabatan (visibilitas menu) ---
+CONFIG_ROLES: tuple[str, ...] = ("kasir", "mekanik", "partman")
+PERMISSION_FEATURES: list[dict[str, str]] = [
+    {"key": "antrian", "label": "Antrian Servis"},
+    {"key": "stok", "label": "Stok Part"},
+    {"key": "outlet", "label": "Outlet & Penjualan Part"},
+    {"key": "cek_stok", "label": "Cek Fisik Stok"},
+    {"key": "mutasi", "label": "Mutasi Stok"},
+    {"key": "piutang", "label": "Piutang / Hutang"},
+    {"key": "belanja", "label": "Belanja"},
+    {"key": "tools", "label": "Checklist Tools"},
+    {"key": "pelanggan", "label": "Data Pelanggan"},
+    {"key": "motor", "label": "Data Motor"},
+    {"key": "jasa", "label": "Data Jasa"},
+    {"key": "pengingat", "label": "Pengingat Servis"},
+    {"key": "histori", "label": "Histori Servis"},
+    {"key": "notifikasi", "label": "Notifikasi"},
+]
+FEATURE_KEYS: set[str] = {f["key"] for f in PERMISSION_FEATURES}
+ALL_FEATURES: list[str] = [f["key"] for f in PERMISSION_FEATURES]
+# Default menyamai perilaku peran saat ini (agar tidak ada yang berubah sampai owner mengatur).
+DEFAULT_PERMISSIONS: dict[str, list[str]] = {
+    "kasir": ["antrian", "outlet", "piutang", "belanja", "pelanggan", "motor", "jasa", "pengingat", "histori", "notifikasi"],
+    "mekanik": list(ALL_FEATURES),
+    "partman": ["stok", "outlet", "cek_stok", "mutasi", "jasa", "pengingat", "histori", "notifikasi"],
+}
 
 password_hash = PasswordHash.recommended()
 DUMMY_HASH = password_hash.hash("dummy-password-never-used")
@@ -59,6 +86,36 @@ DEFAULT_SHOP = {
 async def get_shop() -> dict:
     doc = await db.settings.find_one({"id": "shop"}, {"_id": 0})
     return {**DEFAULT_SHOP, **(doc or {})}
+
+
+async def get_permissions() -> dict[str, list[str]]:
+    doc = await db.settings.find_one({"id": "permissions"}, {"_id": 0})
+    roles = (doc or {}).get("roles") or {}
+    out: dict[str, list[str]] = {}
+    for r in CONFIG_ROLES:
+        vals = roles.get(r)
+        src = vals if isinstance(vals, list) else DEFAULT_PERMISSIONS[r]
+        out[r] = [k for k in src if k in FEATURE_KEYS]
+    return out
+
+
+async def effective_permissions(role: str) -> list[str]:
+    if role == "owner":
+        return list(ALL_FEATURES)
+    perms = await get_permissions()
+    return perms.get(role, [])
+
+
+async def user_with_perms(doc: dict) -> dict:
+    pub = to_public(doc)
+    pub["permissions"] = await effective_permissions(pub["role"])
+    return pub
+
+
+async def get_payroll_settings() -> dict:
+    doc = await db.settings.find_one({"id": "payroll"}, {"_id": 0})
+    return {"bonus_per_unit": int((doc or {}).get("bonus_per_unit") or 0),
+            "owner_draw": int((doc or {}).get("owner_draw") or 0)}
 
 
 def wa_phone(raw: str) -> str:
@@ -162,6 +219,7 @@ class UserCreate(BaseModel):
     password: str
     name: str
     role: Role
+    base_salary: int = 0
 
 
 class UserUpdate(BaseModel):
@@ -169,6 +227,26 @@ class UserUpdate(BaseModel):
     role: Optional[Role] = None
     password: Optional[str] = None
     disabled: Optional[bool] = None
+    base_salary: Optional[int] = None
+
+
+class PermissionUpdate(BaseModel):
+    roles: dict[str, list[str]]
+
+    @field_validator("roles")
+    @classmethod
+    def _check(cls, value: dict[str, list[str]]) -> dict[str, list[str]]:
+        out: dict[str, list[str]] = {}
+        for role, keys in value.items():
+            if role not in CONFIG_ROLES:
+                raise ValueError(f"Jabatan tidak dikenal: {role}")
+            out[role] = [k for k in dict.fromkeys(keys) if k in FEATURE_KEYS]
+        return out
+
+
+class PayrollSettingsIn(BaseModel):
+    bonus_per_unit: int = 0
+    owner_draw: int = 0
 
 
 def make_token(user: dict) -> str:
@@ -262,9 +340,11 @@ async def seed():
         await db.users.update_one(
             {"username": username},
             {"$setOnInsert": {"id": new_id(), "username": username, "name": name, "role": role,
-                              "hashed_password": password_hash.hash(pw), "disabled": False, "created_at": iso(now())}},
+                              "hashed_password": password_hash.hash(pw), "disabled": False, "base_salary": 0, "created_at": iso(now())}},
             upsert=True,
         )
+    await db.settings.update_one({"id": "permissions"}, {"$setOnInsert": {"id": "permissions", "roles": DEFAULT_PERMISSIONS, "created_at": iso(now())}}, upsert=True)
+    await db.settings.update_one({"id": "payroll"}, {"$setOnInsert": {"id": "payroll", "bonus_per_unit": 0, "owner_draw": 0, "created_at": iso(now())}}, upsert=True)
     if await db.services.count_documents({}) == 0:
         for code, name, price in [("J001", "Servis Ringan", 50000), ("J002", "Servis CVT", 50000), ("J003", "Ganti Oli (jasa)", 15000),
                                   ("J004", "Ganti Kampas Rem", 35000), ("J005", "Servis Besar", 150000), ("J006", "Ganti Bearing", 40000)]:
@@ -295,12 +375,12 @@ async def login(body: LoginIn):
         raise HTTPException(status_code=401, detail="Username atau password salah")
     if doc.get("disabled") or not password_hash.verify(body.password, doc["hashed_password"]):
         raise HTTPException(status_code=401, detail="Username atau password salah")
-    return {"access_token": make_token(doc), "token_type": "bearer", "user": to_public(doc)}
+    return {"access_token": make_token(doc), "token_type": "bearer", "user": await user_with_perms(doc)}
 
 
 @api.get("/auth/me")
 async def me(user: CurrentUser):
-    return user
+    return {**user, "permissions": await effective_permissions(user["role"])}
 
 
 # --------------------------------------------------------------------------- users (owner)
@@ -328,7 +408,7 @@ async def create_user(body: UserCreate, user: OwnerUser):
     if await db.users.find_one({"username": uname}):
         raise HTTPException(status_code=400, detail="Username sudah dipakai")
     doc = {"id": new_id(), "username": uname, "name": body.name, "role": body.role,
-           "hashed_password": password_hash.hash(body.password), "disabled": False, "created_at": iso(now())}
+           "hashed_password": password_hash.hash(body.password), "disabled": False, "base_salary": int(body.base_salary or 0), "created_at": iso(now())}
     await db.users.insert_one(doc)
     await audit(None, "USER_CREATE", user, f"Tambah pengguna {uname} ({body.role})")
     return to_public(doc)
@@ -350,6 +430,103 @@ async def update_user(uid: str, body: UserUpdate, user: OwnerUser):
 async def list_mechanics(_: CurrentUser):
     docs = await db.users.find({"role": {"$in": ["mekanik", "owner"]}, "disabled": False, "deleted_at": None}, {"_id": 0, "hashed_password": 0}).to_list(200)
     return docs
+
+
+# --------------------------------------------------------------------------- hak akses (owner)
+
+@api.get("/permissions")
+async def permissions_get(_: OwnerUser):
+    return {"features": PERMISSION_FEATURES, "roles": await get_permissions()}
+
+
+@api.put("/permissions")
+async def permissions_update(body: PermissionUpdate, user: OwnerUser):
+    current = await get_permissions()
+    current.update(body.roles)
+    await db.settings.update_one({"id": "permissions"}, {"$set": {"id": "permissions", "roles": current, "updated_at": iso(now())}}, upsert=True)
+    await audit(None, "PERMISSIONS_UPDATE", user, "Hak akses jabatan diperbarui")
+    return {"features": PERMISSION_FEATURES, "roles": current}
+
+
+# --------------------------------------------------------------------------- penggajian (owner)
+
+async def _mechanic_units(month: str) -> dict[str, dict]:
+    """Per mechanic_id: jumlah unit servis lunas (1 nota lunas = 1 unit) + rincian di bulan tsb."""
+    pays = await db.payments.find({"date": {"$regex": f"^{month.replace('-', '')}"}, **PAY_ACTIVE}, {"_id": 0}).to_list(20000)
+    ids = [p["transaction_id"] for p in pays]
+    trxs = {t["id"]: t for t in await db.service_transactions.find({"id": {"$in": ids}}, {"_id": 0}).to_list(20000)}
+    by_mech: dict[str, dict] = {}
+    for p in pays:
+        t = trxs.get(p["transaction_id"], {})
+        if t.get("status") == "DIBATALKAN":
+            continue
+        mid = t.get("mechanic_id")
+        if not mid:
+            continue
+        m = by_mech.setdefault(mid, {"count": 0, "units": []})
+        m["count"] += 1
+        m["units"].append({"invoice_no": t.get("invoice_no") or t.get("trx_no") or "-", "date": t.get("date", ""),
+                           "plate": t.get("plate", ""), "customer_name": t.get("customer_name", ""), "total": p.get("total", 0)})
+    return by_mech
+
+
+def _wib_month() -> str:
+    return now().astimezone(timezone(timedelta(hours=7))).strftime("%Y-%m")
+
+
+@api.get("/payroll/settings")
+async def payroll_settings_get(_: OwnerUser):
+    return await get_payroll_settings()
+
+
+@api.put("/payroll/settings")
+async def payroll_settings_update(body: PayrollSettingsIn, user: OwnerUser):
+    await db.settings.update_one({"id": "payroll"}, {"$set": {"id": "payroll", "bonus_per_unit": int(body.bonus_per_unit or 0),
+                                 "owner_draw": int(body.owner_draw or 0), "updated_at": iso(now())}}, upsert=True)
+    await audit(None, "PAYROLL_SETTINGS", user, "Pengaturan penggajian diperbarui")
+    return await get_payroll_settings()
+
+
+@api.get("/payroll/report")
+async def payroll_report(_: OwnerUser, month: str = ""):
+    month = month or _wib_month()
+    ps = await get_payroll_settings()
+    bpu = ps["bonus_per_unit"]
+    users = await db.users.find({"deleted_at": None, "disabled": {"$ne": True}}, {"_id": 0, "hashed_password": 0}).to_list(500)
+    units = await _mechanic_units(month)
+    rows = []
+    for u in users:
+        role = u["role"]
+        base = int(ps["owner_draw"]) if role == "owner" else int(u.get("base_salary") or 0)
+        cnt = units.get(u["id"], {}).get("count", 0) if role == "mekanik" else 0
+        bonus = cnt * bpu if role == "mekanik" else 0
+        rows.append({"user_id": u["id"], "name": u["name"], "username": u["username"], "role": role,
+                     "base_salary": base, "unit_count": cnt, "bonus_per_unit": bpu if role == "mekanik" else 0,
+                     "bonus_total": bonus, "total": base + bonus})
+    order = {"owner": 0, "mekanik": 1, "kasir": 2, "partman": 3}
+    rows.sort(key=lambda r: (order.get(r["role"], 9), r["name"]))
+    return {"month": month, "bonus_per_unit": bpu, "rows": rows,
+            "total_base": sum(r["base_salary"] for r in rows), "total_bonus": sum(r["bonus_total"] for r in rows),
+            "grand_total": sum(r["total"] for r in rows)}
+
+
+@api.get("/payroll/slip/{uid}")
+async def payroll_slip(uid: str, _: OwnerUser, month: str = ""):
+    month = month or _wib_month()
+    u = await db.users.find_one({"id": uid, "deleted_at": None}, {"_id": 0, "hashed_password": 0})
+    if not u:
+        raise HTTPException(status_code=404, detail="Karyawan tidak ditemukan")
+    ps = await get_payroll_settings()
+    role = u["role"]
+    base = int(ps["owner_draw"]) if role == "owner" else int(u.get("base_salary") or 0)
+    detail = await _mechanic_units(month) if role == "mekanik" else {}
+    md = detail.get(uid, {"count": 0, "units": []})
+    cnt = md["count"] if role == "mekanik" else 0
+    bpu = ps["bonus_per_unit"] if role == "mekanik" else 0
+    bonus = cnt * bpu
+    return {"month": month, "user": {"id": u["id"], "name": u["name"], "username": u["username"], "role": role},
+            "base_salary": base, "unit_count": cnt, "bonus_per_unit": bpu, "units": md.get("units", []) if role == "mekanik" else [],
+            "bonus_total": bonus, "total": base + bonus}
 
 
 # --------------------------------------------------------------------------- customers & vehicles

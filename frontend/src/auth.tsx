@@ -5,7 +5,7 @@ import { queryClient } from "@/src/query-client";
 import { storage } from "@/src/utils/storage";
 
 export type Role = "owner" | "kasir" | "mekanik" | "partman";
-export type User = { id: string; username: string; name: string; role: Role };
+export type User = { id: string; username: string; name: string; role: Role; permissions?: string[] };
 
 type Ctx = {
   user: User | null;
@@ -13,6 +13,7 @@ type Ctx = {
   login: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   can: (...roles: Role[]) => boolean;
+  canFeature: (key: string) => boolean;
 };
 
 const AuthCtx = createContext<Ctx | null>(null);
@@ -59,7 +60,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [user],
   );
 
-  const value = useMemo(() => ({ user, loading, login, logout, can }), [user, loading, login, logout, can]);
+  // Visibilitas fitur/menu yang diatur owner per jabatan. Owner selalu melihat semua.
+  const canFeature = useCallback(
+    (key: string) => {
+      if (!user) return false;
+      if (user.role === "owner") return true;
+      return (user.permissions ?? []).includes(key);
+    },
+    [user],
+  );
+
+  const value = useMemo(() => ({ user, loading, login, logout, can, canFeature }), [user, loading, login, logout, can, canFeature]);
   return <AuthCtx.Provider value={value}>{children}</AuthCtx.Provider>;
 }
 

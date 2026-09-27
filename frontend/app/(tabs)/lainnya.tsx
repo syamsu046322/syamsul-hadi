@@ -19,7 +19,7 @@ export default function Lainnya() {
   const router = useRouter();
   const qc = useQueryClient();
   const toast = useToast();
-  const { user, can, logout } = useAuth();
+  const { user, canFeature, logout } = useAuth();
   const [confirm, setConfirm] = useState(false);
   const [reset, setReset] = useState(false);
   const [resetPw, setResetPw] = useState("");
@@ -30,24 +30,26 @@ export default function Lainnya() {
   });
 
   const items: { label: string; sub: string; icon: IoniconName; href: string; show: boolean; testID: string }[] = [
-    { label: "Histori Servis", sub: "Cari nota, nopol, pelanggan", icon: "time-outline", href: "/histori", show: true, testID: "menu-history" },
-    { label: "Pengingat Servis", sub: "Jadwal servis berikutnya + WhatsApp", icon: "alarm-outline", href: "/pengingat", show: true, testID: "menu-reminders" },
-    { label: "Piutang / Hutang", sub: "Nota belum lunas & pembayaran cicilan", icon: "wallet-outline", href: "/piutang", show: can("kasir"), testID: "menu-debts" },
-    { label: "Belanja", sub: "Belanja bengkel, keluarga (kasbon), pinjaman", icon: "cart-outline", href: "/belanja", show: can("kasir"), testID: "menu-expenses" },
-    { label: "Checklist Tools", sub: "Cek peralatan mingguan", icon: "hammer-outline", href: "/tools", show: can("mekanik"), testID: "menu-tools" },
-    { label: "Outlet & Penjualan Part", sub: "Jualan langsung: konsumen, part, laba, cash/kredit", icon: "storefront-outline", href: "/outlet", show: can("kasir", "partman"), testID: "menu-outlet" },
-    { label: "Cek Fisik Stok", sub: "Stock opname per rak & persetujuan selisih", icon: "clipboard-outline", href: "/cek-stok", show: can("partman"), testID: "menu-stock-check" },
-    { label: "Notifikasi", sub: "Pemberitahuan untuk Anda", icon: "notifications-outline", href: "/notifikasi", show: user?.role !== "owner", testID: "menu-notifications-role" },
-    { label: "Data Pelanggan", sub: "Master pelanggan", icon: "people-outline", href: "/master/pelanggan", show: can("mekanik", "kasir"), testID: "menu-customers" },
-    { label: "Data Motor", sub: "Master kendaraan", icon: "bicycle-outline", href: "/master/motor", show: can("mekanik", "kasir"), testID: "menu-vehicles" },
-    { label: "Data Jasa", sub: "Master jasa & harga", icon: "construct-outline", href: "/master/jasa", show: true, testID: "menu-services" },
-    { label: "Mutasi Stok", sub: "Riwayat keluar/masuk part", icon: "swap-vertical-outline", href: "/mutasi", show: can("partman", "mekanik"), testID: "menu-stock-movements" },
+    { label: "Histori Servis", sub: "Cari nota, nopol, pelanggan", icon: "time-outline", href: "/histori", show: canFeature("histori"), testID: "menu-history" },
+    { label: "Pengingat Servis", sub: "Jadwal servis berikutnya + WhatsApp", icon: "alarm-outline", href: "/pengingat", show: canFeature("pengingat"), testID: "menu-reminders" },
+    { label: "Piutang / Hutang", sub: "Nota belum lunas & pembayaran cicilan", icon: "wallet-outline", href: "/piutang", show: canFeature("piutang"), testID: "menu-debts" },
+    { label: "Belanja", sub: "Belanja bengkel, keluarga (kasbon), pinjaman", icon: "cart-outline", href: "/belanja", show: canFeature("belanja"), testID: "menu-expenses" },
+    { label: "Checklist Tools", sub: "Cek peralatan mingguan", icon: "hammer-outline", href: "/tools", show: canFeature("tools"), testID: "menu-tools" },
+    { label: "Outlet & Penjualan Part", sub: "Jualan langsung: konsumen, part, laba, cash/kredit", icon: "storefront-outline", href: "/outlet", show: canFeature("outlet"), testID: "menu-outlet" },
+    { label: "Cek Fisik Stok", sub: "Stock opname per rak & persetujuan selisih", icon: "clipboard-outline", href: "/cek-stok", show: canFeature("cek_stok"), testID: "menu-stock-check" },
+    { label: "Notifikasi", sub: "Pemberitahuan untuk Anda", icon: "notifications-outline", href: "/notifikasi", show: user?.role !== "owner" && canFeature("notifikasi"), testID: "menu-notifications-role" },
+    { label: "Data Pelanggan", sub: "Master pelanggan", icon: "people-outline", href: "/master/pelanggan", show: canFeature("pelanggan"), testID: "menu-customers" },
+    { label: "Data Motor", sub: "Master kendaraan", icon: "bicycle-outline", href: "/master/motor", show: canFeature("motor"), testID: "menu-vehicles" },
+    { label: "Data Jasa", sub: "Master jasa & harga", icon: "construct-outline", href: "/master/jasa", show: canFeature("jasa"), testID: "menu-services" },
+    { label: "Mutasi Stok", sub: "Riwayat keluar/masuk part", icon: "swap-vertical-outline", href: "/mutasi", show: canFeature("mutasi"), testID: "menu-stock-movements" },
     { label: "Laporan & Excel", sub: "Omzet harian/bulanan, export/import", icon: "stats-chart-outline", href: "/laporan", show: user?.role === "owner", testID: "menu-reports" },
     { label: "Laporan Pembatalan", sub: "Faktur yang dibatalkan & alasannya", icon: "close-circle-outline", href: "/pembatalan", show: user?.role === "owner", testID: "menu-cancellations" },
     { label: "Riwayat Per Mekanik", sub: "Servis selesai & omzet bulanan per mekanik", icon: "construct-outline", href: "/laporan-mekanik", show: user?.role === "owner", testID: "menu-mechanic-report" },
+    { label: "Penggajian Karyawan", sub: "Slip gaji & rekap gaji bulanan semua karyawan", icon: "cash-outline", href: "/penggajian", show: user?.role === "owner", testID: "menu-payroll" },
+    { label: "Hak Akses Jabatan", sub: "Atur menu yang tampil untuk mekanik, kasir, partman", icon: "lock-closed-outline", href: "/hak-akses", show: user?.role === "owner", testID: "menu-permissions" },
     { label: "Notifikasi", sub: "Hutang & pemberitahuan penting", icon: "notifications-outline", href: "/notifikasi", show: user?.role === "owner", testID: "menu-notifications" },
     { label: "Profil Bengkel", sub: "Nama, alamat, kontak, logo nota", icon: "storefront-outline", href: "/profil-bengkel", show: user?.role === "owner", testID: "menu-shop-profile" },
-    { label: "Pengguna", sub: "Kelola akun Mekanik, Kasir, Partman", icon: "key-outline", href: "/pengguna", show: user?.role === "owner", testID: "menu-users" },
+    { label: "Pengguna & Gaji Pokok", sub: "Kelola akun & gaji pokok Mekanik, Kasir, Partman", icon: "key-outline", href: "/pengguna", show: user?.role === "owner", testID: "menu-users" },
   ];
 
   return (

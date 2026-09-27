@@ -1,0 +1,33 @@
+{
+  "summary": "Iteration 3 (Penggajian Karyawan): backend + frontend verified via public URL. Backend pytest /app/backend/tests/test_payroll.py -> 9/9 PASS (login returns user.permissions per role; owner has 14 features incl. antrian; GET/PUT /api/permissions owner-only, 403 for kasir/mekanik/partman, PUT reject role 'owner' with 422, update reflects in /auth/me for kasir; PUT /api/users base_salary CRUD via owner; GET/PUT /api/payroll/settings owner-only mekanik->403, bonus_per_unit=10000 & owner_draw=5000000 persist; GET /api/payroll/report rows include owner/mekanik/kasir/partman, owner_row.base_salary=5000000 & bonus_total=0, mekanik bonus_total=unit_count*bonus_per_unit, kasir bonus 0, grand_total=sum(rows.total), non-owner->403; GET /api/payroll/slip/{mek_id} owner-only, total=base+bonus, units:list, kasir->403). Frontend (Expo web, mobile viewport 390x844): OWNER sees menu-payroll, menu-permissions, menu-users, menu-reports on Lainnya tab; /penggajian (payroll-screen) renders with month chips, settings button opens sheet (payroll-bonus-input, payroll-draw-input, payroll-settings-save) — save succeeds and toast 'Pengaturan gaji tersimpan' appears; row payroll-row-mekanik opens /slip-gaji/[id] (payslip-screen) rendering 'Bonus servis (0 unit × Rp 10.000)' + TOTAL GAJI + CETAK SLIP; /hak-akses (permissions-screen) renders per-role chips MEKANIK/KASIR/PARTMAN with per-feature toggles (perm-{role}-antrian etc.) and perm-save-button. NON-OWNER (kasir/mekanik/partman) correctly HIDES menu-payroll, menu-permissions, menu-users, menu-reports on Lainnya. Kasir: cek_stok=false, tools=false, mutasi=false (per spec); belanja & piutang shown. Partman: belanja=false, piutang=false (per spec); cek_stok & mutasi shown; no 'Antrian' tab visible for partman. Mekanik: broad default menus. Deprecated packages detected: none. SafeAreaView issues detected: none.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Direct URL access to owner-only routes by non-owner", "issue": "Navigating directly to /penggajian, /slip-gaji/[id], /hak-akses as kasir/mekanik/partman still renders the screen shell (payroll-screen visible). Backend correctly returns 403 (visible as 4x 403 in console) so data is protected, but shell UI is shown. Menu visibility is per spec, so this is minor.", "affected_testIDs": ["payroll-screen", "permissions-screen", "payslip-screen"]}
+    ],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_payroll.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "(Optional/minor) Add role guard on /penggajian, /hak-akses, /pengguna, /slip-gaji/[id] screens to redirect non-owner to /(tabs) if user.role !== 'owner' (client-side), preventing empty shell + 403s when the URL is typed directly. Not blocking; menu-level hiding meets the requirement."
+  ],
+  "critical_code_review_comments": [
+    "Backend payroll endpoints properly enforce owner-only access via 403 for non-owner (verified via pytest for permissions, settings, report, slip).",
+    "PUT /api/permissions rejects role='owner' with 422 (immutable owner role), matches spec.",
+    "GET /api/payroll/report includes owner row using owner_draw and grand_total = sum(row.total).",
+    "Frontend Lainnya menu uses user?.role === 'owner' gate for menu-payroll/menu-permissions/menu-users/menu-reports — verified hidden for all 3 non-owner roles.",
+    "Kasir default excludes cek_stok/tools/mutasi and Partman default excludes belanja/piutang/antrian — matches spec."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (9/9)", "frontend": "100% (owner CRUD/screens + 3 non-owner RBAC visibility)"},
+  "seed_data_creation": "Only used existing seeded users (owner/kasir/mekanik/partman). Payroll settings updated during tests to bonus_per_unit=10000 and owner_draw=5000000 (matches defaults expected in tests). Kasir base_salary set to 1,500,000 by test_user_base_salary_crud (persists after test).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Backend public URL: https://android-app-test-5.preview.emergentagent.com/api. Run: cd /app/backend && API_BASE=https://android-app-test-5.preview.emergentagent.com/api python -m pytest tests/test_payroll.py -v -o addopts=. Frontend login input testIDs render as data-testid ON the <input> element itself (not on a wrapper); use fill selector '[data-testid=\"login-username-input\"]' directly. Key screens: /penggajian (payroll-screen, payroll-month, payroll-settings-button, payroll-row-{username}, payroll-bonus-input, payroll-draw-input, payroll-settings-save), /slip-gaji/[id] (payslip-screen, payslip-print-button), /hak-akses (permissions-screen, perm-role, perm-{role}-{feature}, perm-save-button). Lainnya tab route: /lainnya. Owner-only menus: menu-payroll, menu-permissions, menu-users, menu-reports, menu-cancellations, menu-mechanic-report, menu-shop-profile, menu-notifications.",
+  "rca_of_issue": "No unresolved issues. Only a minor observation: direct-URL to owner-only routes shows empty shell for non-owner (backend still protects data). If desired, add a client-side role guard in the affected screens."
+}

@@ -9,7 +9,7 @@ import { Badge, Button, Confirm, Empty, Header, Input, Loading, Sheet, useToast 
 import { makeStyles, useTheme } from "@/src/theme";
 
 const ROLES = ["owner", "kasir", "mekanik", "partman"] as const;
-const EMPTY = { username: "", name: "", password: "", role: "mekanik" as (typeof ROLES)[number], disabled: false };
+const EMPTY = { username: "", name: "", password: "", role: "mekanik" as (typeof ROLES)[number], disabled: false, base_salary: "" };
 
 export default function Pengguna() {
   const styles = useStyles();
@@ -29,8 +29,8 @@ export default function Pengguna() {
 
   const save = useMutation({
     mutationFn: () => edit?.id
-      ? api(`/users/${edit.id}`, { method: "PUT", body: { name: form.name, role: form.role, disabled: form.disabled, ...(form.password ? { password: form.password } : {}) } })
-      : api("/users", { body: { username: form.username, name: form.name, password: form.password, role: form.role } }),
+      ? api(`/users/${edit.id}`, { method: "PUT", body: { name: form.name, role: form.role, disabled: form.disabled, base_salary: Number(form.base_salary) || 0, ...(form.password ? { password: form.password } : {}) } })
+      : api("/users", { body: { username: form.username, name: form.name, password: form.password, role: form.role, base_salary: Number(form.base_salary) || 0 } }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["users"] }); qc.invalidateQueries({ queryKey: ["mechanics"] }); setEdit(null); toast.show("Pengguna tersimpan", "success"); },
     onError: (e: any) => toast.show(e.message, "error"),
   });
@@ -42,10 +42,10 @@ export default function Pengguna() {
         <FlatList data={list.data ?? []} keyExtractor={(u) => u.id} contentContainerStyle={{ paddingBottom: 100 }}
           ListEmptyComponent={<Empty text="Belum ada pengguna." />}
           renderItem={({ item: u }) => (
-            <Pressable style={styles.row} onPress={() => { setEdit(u); setForm({ username: u.username, name: u.name, password: "", role: u.role, disabled: !!u.disabled }); }} testID={`user-row-${u.username}`}>
+            <Pressable style={styles.row} onPress={() => { setEdit(u); setForm({ username: u.username, name: u.name, password: "", role: u.role, disabled: !!u.disabled, base_salary: u.base_salary ? String(u.base_salary) : "" }); }} testID={`user-row-${u.username}`}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.name}>{u.name}</Text>
-                <Text style={styles.sub}>@{u.username}</Text>
+                <Text style={styles.sub}>@{u.username}{u.base_salary ? ` · Gaji pokok Rp ${Number(u.base_salary).toLocaleString("id-ID")}` : ""}</Text>
               </View>
               <Badge label={u.role.toUpperCase()} tone={u.role === "owner" ? "brand" : "neutral"} />
               {u.disabled ? <Badge label="NONAKTIF" tone="error" /> : null}
@@ -74,6 +74,11 @@ export default function Pengguna() {
             </Pressable>
           ))}
         </View>
+        {form.role !== "owner" ? (
+          <Input label="Gaji pokok / bulan (Rp)" value={form.base_salary} onChangeText={(v) => setForm({ ...form, base_salary: v.replace(/[^0-9]/g, "") })} keyboardType="number-pad" placeholder="0" testID="user-salary-input" />
+        ) : (
+          <Text style={styles.hint}>Pengambilan tetap Owner diatur di menu Penggajian → Pengaturan.</Text>
+        )}
         {edit?.id ? (
           <Pressable onPress={() => setForm({ ...form, disabled: !form.disabled })} style={styles.toggle} testID="user-disabled-toggle">
             <Text style={styles.name}>Akun {form.disabled ? "NONAKTIF" : "AKTIF"}</Text>
@@ -96,4 +101,5 @@ const useStyles = makeStyles((c) => ({
   roleChip: { height: 40, paddingHorizontal: 14, borderWidth: 2, borderColor: c.border, justifyContent: "center" },
   roleText: { color: c.onSurface, fontWeight: "500", fontSize: 13 },
   toggle: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", padding: 12, borderWidth: 2, borderColor: c.border, marginBottom: 12 },
+  hint: { fontSize: 12, color: c.muted, marginBottom: 12, lineHeight: 17 },
 }));
